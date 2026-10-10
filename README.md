@@ -8,7 +8,7 @@ Claude читает код, составляет карту страниц и ф
 
 ## Установка
 
-**claude.ai:** скачай zip с папкой `teach/` (Code → Download ZIP и оставь в архиве только папку со `SKILL.md`, либо возьми собранный `teach-skill.zip`) и загрузи его в Settings → Capabilities → Skills. Нужно включённое выполнение кода. Чтобы скачалась голосовая модель, добавь `huggingface.co` в разрешённые домены выполнения кода. Без этого уроки снимаются только с субтитрами (`--voice none`).
+**claude.ai:** скачай [`teach-skill.zip` из последнего релиза](https://github.com/Shadowgod1/teach-skill/releases/latest/download/teach-skill.zip) и загрузи его в Settings → Capabilities → Skills. Нужно включённое выполнение кода. Чтобы скачалась голосовая модель, добавь `huggingface.co` в разрешённые домены выполнения кода. Без этого уроки снимаются только с субтитрами (`--voice none`).
 
 **Claude Code:**
 
