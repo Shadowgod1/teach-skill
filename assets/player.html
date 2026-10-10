@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>teach player</title>
+<!--
+  Draws one /teach episode. Every frame is a pure function of time:
+  window.__seek(t) renders the frame at t seconds. render.mjs serves this file
+  next to the episode folder (episode.json, timeline.json, shots/).
+  Open /__teach/player.html?t=12.5 in a browser to look at a single frame.
+-->
+<link rel="stylesheet" href="/__teach/fonts.css">
+<link rel="stylesheet" href="/__teach/hljs.css">
+<link rel="stylesheet" href="/theme.css">
+<script src="/__teach/hljs.js"></script>
+<style>
+  :root {
+    --bg: #0e1116; --fg: #f4f6fb; --muted: #9aa3b2; --accent: #4f7cff;
+    --panel: #171b23; --line: rgba(255,255,255,.08);
+    --font: "Inter", system-ui, sans-serif; --mono: "JetBrains Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); overflow: hidden; }
+  #stage { position: relative; overflow: hidden; background: var(--bg); color: var(--fg);
+    font-family: var(--font); -webkit-font-smoothing: antialiased; }
+  #stage::before { content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(1200px 700px at 15% -10%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 70%),
+                radial-gradient(900px 600px at 110% 120%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 70%); }
+  .layer { position: absolute; inset: 0; }
+
+  /* top bar */
+  #top { position: absolute; left: var(--pad); right: var(--pad); top: 0; height: var(--top);
+    display: flex; align-items: center; justify-content: space-between; font-size: 24px; color: var(--muted); }
+  #series { display: flex; align-items: center; gap: 14px; font-weight: 600; }
+  #series .dot { width: 12px; height: 12px; border-radius: 4px; background: var(--accent); }
+  #series b { color: var(--fg); font-weight: 600; }
+  #step { display: flex; align-items: center; gap: 12px; font-weight: 600; color: var(--fg); }
+  #step .n { font-variant-numeric: tabular-nums; color: var(--bg); background: var(--accent);
+    border-radius: 999px; padding: 4px 14px; font-size: 20px; }
+
+  /* app window */
+  #win { position: absolute; border-radius: 16px; overflow: hidden; background: #fff;
+    box-shadow: 0 30px 80px rgba(0,0,0,.45), 0 0 0 1px rgba(255,255,255,.08); }
+  #chrome { position: absolute; left: 0; right: 0; top: 0; height: var(--chrome); background: #20242d;
+    display: flex; align-items: center; gap: 10px; padding: 0 18px; }
+  #chrome i { width: 13px; height: 13px; border-radius: 50%; background: #3a404c; }
+  #url { margin-left: 18px; flex: 1; max-width: 60%; height: 26px; border-radius: 8px; background: #2c313b;
+    color: #b8c0cc; font-size: 15px; display: flex; align-items: center; padding: 0 14px; white-space: nowrap; overflow: hidden; }
+  #view { position: absolute; left: 0; right: 0; bottom: 0; overflow: hidden; background: #fff; }
+  #cam, #pan { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  #cam img { position: absolute; left: 0; top: 0; display: block; }
+  #shots { position: absolute; left: 0; top: 0; z-index: 0; }
+  #marks { position: absolute; left: 0; top: 0; z-index: 1; }
+  .ring { position: absolute; border-radius: 12px; border: 4px solid var(--accent);
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 25%, transparent), 0 0 40px color-mix(in srgb, var(--accent) 45%, transparent); }
+  .tag { position: absolute; white-space: nowrap; background: var(--accent); color: #fff; font-weight: 600;
+    border-radius: 10px; padding: 8px 16px; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+  .typed { position: absolute; white-space: pre; overflow: hidden; display: flex; align-items: center; color: #111; }
+  .typed .caret { display: inline-block; width: 2px; height: 1.1em; background: currentColor; margin-left: 1px; }
+  #cursor { position: absolute; z-index: 2; left: 0; top: 0; width: 34px; height: 34px; transform-origin: 3px 3px; }
+  .ripple { position: absolute; border-radius: 50%; border: 3px solid var(--accent); }
+
+  /* cards */
+  .card { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center;
+    padding: 0 calc(var(--pad) * 1.6); }
+  .kicker { font-size: 30px; font-weight: 600; color: var(--accent); letter-spacing: .02em; margin-bottom: 26px; }
+  .title { font-size: 96px; line-height: 1.04; font-weight: 800; letter-spacing: -.02em; max-width: 1500px; }
+  .subtitle { font-size: 38px; line-height: 1.3; color: var(--muted); margin-top: 30px; max-width: 1300px; }
+  .goals { margin-top: 56px; display: flex; gap: 22px; flex-wrap: wrap; }
+  .goals span { font-size: 28px; font-weight: 600; padding: 14px 24px; border-radius: 14px;
+    background: var(--panel); border: 1px solid var(--line); }
+  .items { margin-top: 48px; display: flex; flex-direction: column; gap: 22px; }
+  .item { display: flex; align-items: center; gap: 22px; font-size: 40px; font-weight: 600; }
+  .item .check { flex: none; width: 52px; height: 52px; border-radius: 14px; background: var(--accent);
+    display: grid; place-items: center; }
+
+  /* code */
+  #code { position: absolute; border-radius: 16px; overflow: hidden; background: #0b0d12;
+    box-shadow: 0 30px 80px rgba(0,0,0,.45), 0 0 0 1px rgba(255,255,255,.08); }
+  #code .tab { height: 56px; display: flex; align-items: center; padding: 0 24px; gap: 14px; background: #151922;
+    font-family: var(--mono); font-size: 20px; color: #c9d1dc; border-bottom: 1px solid var(--line); }
+  #code .tab .lang { margin-left: auto; color: var(--muted); font-size: 16px; text-transform: uppercase; }
+  #code .body { position: absolute; left: 0; right: 0; top: 56px; bottom: 0; overflow: hidden; }
+  #code .lines { position: absolute; left: 0; right: 0; top: 0; font-family: var(--mono); font-variant-ligatures: none; }
+  #code .ln { display: flex; white-space: pre; padding: 0 28px 0 0; }
+  #code .ln .no { flex: none; width: 76px; text-align: right; padding-right: 22px; color: #4b5363; }
+  #code .ln code { color: #e6edf3; font-family: inherit; }
+  #code .bar { position: absolute; left: 0; right: 0; background: color-mix(in srgb, var(--accent) 16%, transparent);
+    border-left: 4px solid var(--accent); }
+
+  /* subtitles */
+  #subs { position: absolute; left: 0; right: 0; bottom: 0; height: var(--bottom);
+    display: flex; align-items: center; justify-content: center; padding: 0 var(--pad); }
+  #subs span { max-width: 1560px; text-align: center; font-size: 36px; line-height: 1.3; font-weight: 500;
+    background: rgba(10,12,16,.82); color: #fff; padding: 12px 26px; border-radius: 14px;
+    box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="layer" id="cards"></div>
+  <div id="code" hidden><div class="tab"><span class="file"></span><span class="lang"></span></div>
+    <div class="body"><div class="bar"></div><div class="lines"></div></div></div>
+  <div id="win" hidden>
+    <div id="chrome"><i></i><i></i><i></i><div id="url"></div></div>
+    <div id="view"><div id="cam"><div id="pan"><div id="shots"></div><div id="marks"></div>
+      <svg id="cursor" viewBox="0 0 34 34"><path d="M4 3 L4 27 L10.5 21 L15 31 L19.5 29 L15 19.5 L24 19.5 Z"
+        fill="#111" stroke="#fff" stroke-width="2.2" stroke-linejoin="round"/></svg></div></div></div>
+  </div>
+  <div id="top"><div id="series"><span class="dot"></span><span class="text"></span></div><div id="step"></div></div>
+  <div id="subs"><span></span></div>
+</div>
+<script>
+(() => {
+  const $ = (s, r = document) => r.querySelector(s);
+  const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+  const lerp = (a, b, k) => a + (b - a) * k;
+  const ease = (k) => (k = clamp(k), k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2);
+  const out = (k) => 1 - Math.pow(1 - clamp(k), 3);
+  const ramp = (t, a, d) => clamp((t - a) / d);
+  const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+
+  const IN = 0.35, OUT = 0.25;   // scene fade in / out
+  let E, T, B, W, H, scenes, layout;
+
+  async function load() {
+    const get = (p, fallback) => fetch(p).then((r) => (r.ok ? r.json() : fallback)).catch(() => fallback);
+    E = await get("/episode.json");
+    T = await get("/timeline.json");
+    B = await get("/shots/boxes.json", {});
+    [W, H] = [E.format?.w ?? 1920, E.format?.h ?? 1080];
+    const root = document.documentElement.style;
+    for (const [k, v] of Object.entries(E.theme ?? {})) root.setProperty(`--${k}`, v);
+    const stage = $("#stage");
+    stage.style.width = W + "px"; stage.style.height = H + "px";
+
+    // Layout: top bar, bottom subtitle band, app window in between.
+    const vertical = H > W;
+    const pad = vertical ? 60 : 100, top = vertical ? 150 : 84, bottom = vertical ? 340 : 160, chrome = 44;
+    Object.entries({ pad, top, bottom, chrome }).forEach(([k, v]) => root.setProperty(`--${k}`, v + "px"));
+    layout = { pad, top, bottom, chrome };
+
+    // Merge timing from timeline.json into scenes and resolve event times.
+    scenes = E.scenes.map((s, i) => {
+      const t = T.scenes.find((x) => x.id === s.id) ?? T.scenes[i];
+      const sc = { ...s, start: t.start, dur: t.dur, lines: t.lines.map((l) => ({ ...l, start: l.start - t.start })) };
+      sc.events = (s.events ?? []).map((e) => ({ ...e, t: when(sc, e.at ?? 0) }))
+        .sort((a, b) => a.t - b.t);
+      if (sc.events.some((e) => e.until !== undefined))
+        sc.events.forEach((e) => { if (e.until !== undefined) e.dur = when(sc, e.until) - e.t; });
+      return sc;
+    });
+    window.__duration = T.total;
+
+    // Preload every screenshot.
+    const srcs = new Set();
+    scenes.forEach((s) => { if (s.shot) srcs.add(s.shot); s.events.forEach((e) => e.do === "shot" && srcs.add(e.src)); });
+    const holder = $("#shots");
+    await Promise.all([...srcs].map((src) => new Promise((ok, fail) => {
+      const img = new Image();
+      img.dataset.src = src;
+      img.onload = () => img.decode().then(ok, ok);
+      img.onerror = () => fail(new Error("missing screenshot " + src));
+      img.src = `/shots/${src}.png`;
+      holder.appendChild(img);
+    })));
+    await document.fonts.ready;
+    buildCards();
+  }
+
+  // "L2" start of line 2, "L2e" its end, "+0.4" / "-0.2" offsets, plain numbers are seconds into the scene.
+  function when(sc, at) {
+    if (typeof at === "number") return at;
+    const m = /^L(\d+)(e?)([+-][\d.]+)?$/.exec(String(at).trim());
+    if (!m) throw new Error(`bad time "${at}" in scene ${sc.id}`);
+    const line = sc.lines[+m[1]];
+    if (!line) throw new Error(`scene ${sc.id} has no line ${m[1]}`);
+    return line.start + (m[2] ? line.dur : 0) + (m[3] ? parseFloat(m[3]) : 0);
+  }
+
+  // ---------- window geometry ----------
+  function shotInfo(src) {
+    const b = B[src] ?? {};
+    return { w: b.w ?? E.viewport?.w ?? 1600, h: b.h ?? E.viewport?.h ?? 900, vh: E.viewport?.h ?? 900, boxes: b.boxes ?? {} };
+  }
+  function windowRect() {
+    const vw = E.viewport?.w ?? 1600, vh = E.viewport?.h ?? 900;
+    const maxW = W - layout.pad * 2, maxH = H - layout.top - layout.bottom - layout.chrome;
+    const s = Math.min(maxW / vw, maxH / vh);
+    const w = vw * s, h = vh * s + layout.chrome;
+    return { x: (W - w) / 2, y: layout.top + (H - layout.top - layout.bottom - h) / 2, w, h, s };
+  }
+
+  // ---------- cards (title / recap) ----------
+  const check = '<svg width="30" height="30" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  function buildCards() {
+    const host = $("#cards");
+    for (const sc of scenes) {
+      if (sc.type !== "title" && sc.type !== "recap") continue;
+      const el = document.createElement("div");
+      el.className = "card"; el.dataset.id = sc.id;
+      el.innerHTML = (sc.kicker ? `<div class="kicker">${esc(sc.kicker)}</div>` : "")
+        + `<div class="title">${esc(sc.title ?? "")}</div>`
+        + (sc.subtitle ? `<div class="subtitle">${esc(sc.subtitle)}</div>` : "")
+        + (sc.goals ? `<div class="goals">${sc.goals.map((g) => `<span>${esc(g)}</span>`).join("")}</div>` : "")
+        + (sc.items ? `<div class="items">${sc.items.map((it) => `<div class="item"><span class="check">${check}</span><span>${esc(it.text ?? it)}</span></div>`).join("")}</div>` : "");
+      host.appendChild(el);
+    }
+  }
+  function drawCard(sc, t, first) {
+    const el = $(`.card[data-id="${sc.id}"]`);
+    el.style.display = "flex";
+    const k = first ? 1 : out(ramp(t, 0, .7));   // the first frame is the poster: start settled
+    const parts = [...el.children];
+    parts.forEach((p, i) => {
+      if (p.classList.contains("items")) return;
+      const ki = first ? 1 : out(ramp(t, i * .08, .6));
+      p.style.opacity = ki; p.style.transform = `translateY(${(1 - ki) * 28}px)`;
+    });
+    el.querySelectorAll(".item").forEach((it, i) => {
+      const item = sc.items[i], at = typeof item === "object" && item.at !== undefined ? when(sc, item.at) : sc.lines[i + (sc.itemsFromLine ?? 1)]?.start ?? (.5 + i * .5);
+      const ki = out(ramp(t, at, .45));
+      it.style.opacity = ki; it.style.transform = `translateX(${(1 - ki) * -30}px)`;
+    });
+    return k;
+  }
+
+  // ---------- code ----------
+  function drawCode(sc, t) {
+    const el = $("#code"); el.hidden = false;
+    const r = { x: layout.pad, y: layout.top, w: W - layout.pad * 2, h: H - layout.top - layout.bottom };
+    Object.assign(el.style, { left: r.x + "px", top: r.y + "px", width: r.w + "px", height: r.h + "px" });
+    const lines = el.querySelector(".lines");
+    if (el.dataset.id !== sc.id) {
+      el.dataset.id = sc.id;
+      el.querySelector(".file").textContent = sc.file ?? "";
+      el.querySelector(".lang").textContent = sc.lang ?? "";
+      const src = (sc.code ?? "").replace(/\t/g, "  ").replace(/\n$/, "").split("\n");
+      const first = sc.firstLine ?? 1;
+      const fs = sc.fontSize ?? clamp(Math.floor((r.h - 100) / Math.max(src.length, 14) / 1.55), 20, 34);
+      lines.style.fontSize = fs + "px"; lines.style.lineHeight = Math.round(fs * 1.55) + "px";
+      lines.innerHTML = src.map((l, i) => {
+        let html = esc(l);
+        try { if (window.hljs && sc.lang && hljs.getLanguage(sc.lang)) html = hljs.highlight(l, { language: sc.lang, ignoreIllegals: true }).value; } catch {}
+        return `<div class="ln"><span class="no">${first + i}</span><code>${html || " "}</code></div>`;
+      }).join("");
+      el._lh = Math.round(fs * 1.55); el._n = src.length; el._first = first;
+    }
+    const lh = el._lh, rows = [...lines.children], bodyH = r.h - 56;
+    // Lines appear one by one (reveal: "lines") or all at once.
+    const revealDur = sc.reveal === "lines" ? Math.min(2.5, el._n * .12) : 0;
+    rows.forEach((row, i) => {
+      const k = revealDur ? out(ramp(t, .2 + (i / el._n) * revealDur, .25)) : 1;
+      row.style.opacity = k;
+    });
+    // Focus: highlight a range of lines and scroll it into the middle.
+    let focus = null, fk = 0, prev = null;
+    for (const e of sc.events) if (e.do === "focus" && t >= e.t) { prev = focus; focus = e; fk = ease(ramp(t, e.t, .45)); }
+    const range = (e) => e ? [e.lines[0] - el._first, (e.lines[1] ?? e.lines[0]) - el._first] : null;
+    const cur = range(focus), old = range(prev);
+    const contentH = el._n * lh + 48;
+    const scrollFor = (rg) => rg ? clamp(((rg[0] + rg[1] + 1) / 2) * lh + 24 - bodyH / 2, 0, Math.max(0, contentH - bodyH)) : 0;
+    const scroll = lerp(scrollFor(old), scrollFor(cur), fk);
+    lines.style.transform = `translateY(${24 - scroll}px)`;
+    const bar = el.querySelector(".bar");
+    if (cur) {
+      const y0 = old ? lerp(old[0], cur[0], fk) : cur[0], y1 = old ? lerp(old[1], cur[1], fk) : cur[1];
+      Object.assign(bar.style, { display: "block", top: 24 - scroll + y0 * lh + "px", height: (y1 - y0 + 1) * lh + "px", opacity: old ? 1 : fk });
+      rows.forEach((row, i) => { const on = i >= cur[0] && i <= cur[1]; row.style.opacity *= on ? 1 : lerp(1, .38, fk); });
+    } else bar.style.display = "none";
+  }
+
+  // ---------- app window ----------
+  function drawScreen(sc, t) {
+    const win = $("#win"); win.hidden = false;
+    const R = windowRect();
+    Object.assign(win.style, { left: R.x + "px", top: R.y + "px", width: R.w + "px", height: R.h + "px" });
+    const view = $("#view"); view.style.top = layout.chrome + "px";
+    $("#url").textContent = sc.url ?? E.url ?? "";
+    const s = R.s, vw = R.w, vh = R.h - layout.chrome;
+
+    // Which screenshot is showing, with a short crossfade between states.
+    let cur = sc.shot, prev = null, since = -1e9;
+    for (const e of sc.events) if (e.do === "shot" && t >= e.t) { prev = cur; cur = e.src; since = e.t; }
+    const fade = ease(ramp(t, since, .3));
+    const info = shotInfo(cur);
+    $("#shots").querySelectorAll("img").forEach((img) => {
+      const on = img.dataset.src === cur ? 1 : img.dataset.src === prev ? 1 - fade : 0;
+      img.style.display = on > 0 ? "block" : "none"; img.style.opacity = on;
+      const si = shotInfo(img.dataset.src);
+      img.style.width = si.w * s + "px"; img.style.height = si.h * s + "px";
+      img.style.zIndex = img.dataset.src === cur ? 2 : 1;
+    });
+
+    // Boxes are looked up in the screenshot that is current at the event's own time.
+    const shotAt = (time) => { let c = sc.shot; for (const e of sc.events) if (e.do === "shot" && time >= e.t) c = e.src; return c; };
+    const box = (key, time) => {
+      if (Array.isArray(key)) return { x: key[0], y: key[1], w: 0, h: 0 };
+      const [shot, k] = key.includes(":") ? key.split(":") : [shotAt(time), key];
+      const b = shotInfo(shot).boxes[k];
+      if (!b) throw new Error(`scene ${sc.id}: no box "${k}" in shot "${shot}"`);
+      return b;
+    };
+    const center = (b) => [b.x + b.w / 2, b.y + b.h / 2];
+
+    // Page pan (for fullPage shots): {do:"pan", to: y | "box", dur}
+    let panY = sc.panY ?? 0;
+    for (const e of sc.events) if (e.do === "pan" && t >= e.t) {
+      const target = typeof e.to === "number" ? e.to : clamp(box(e.to, e.t).y - (e.offset ?? 120), 0, info.h - info.vh);
+      panY = lerp(panY, target, ease(ramp(t, e.t, e.dur ?? 1)));
+    }
+
+    // Camera zoom: {do:"zoom", box, scale, dur} eases in, holds, eases out.
+    let z = 1, zk = 0, zs = 1, fx = 0, fy = 0;
+    for (const e of sc.events) if (e.do === "zoom" && t >= e.t) {
+      const d = e.dur ?? 2.5, k = Math.min(ease(ramp(t, e.t, .7)), 1 - ease(ramp(t, e.t + d - .7, .7)));
+      if (k <= 0) continue;
+      const b = box(e.box, e.t), [cx, cy] = center(b);
+      zk = k; zs = e.scale ?? 1.8; z = lerp(1, zs, k); fx = cx * s; fy = (cy - panY) * s;
+    }
+    // Move the focus point towards the centre without ever showing past the page edge.
+    let tx = 0, ty = 0;
+    if (z > 1) {
+      tx = zk * clamp(vw / 2 - fx * zs, vw - vw * zs, 0);
+      ty = zk * clamp(vh / 2 - fy * zs, vh - vh * zs, 0);
+    }
+    $("#cam").style.transform = `translate(${tx}px, ${ty}px) scale(${z})`;
+    $("#pan").style.transform = `translateY(${-panY * s}px)`;
+
+    const marks = $("#marks"); marks.innerHTML = "";
+
+    // Highlights and labels: {do:"highlight", box, dur, label, dim}
+    for (const e of sc.events) if (e.do === "highlight") {
+      const d = e.dur ?? 2;
+      const k = Math.min(out(ramp(t, e.t, .3)), 1 - ramp(t, e.t + d - .25, .25));
+      if (k <= 0) continue;
+      const b = box(e.box, e.t), p = (e.pad ?? 8);
+      const ring = document.createElement("div"); ring.className = "ring";
+      Object.assign(ring.style, { left: (b.x - p) * s + "px", top: (b.y - p) * s + "px", width: (b.w + p * 2) * s + "px", height: (b.h + p * 2) * s + "px",
+        opacity: k, transform: `scale(${lerp(1.08, 1, k)})` });
+      marks.appendChild(ring);
+      if (e.label) {
+        const tag = document.createElement("div"); tag.className = "tag"; tag.textContent = e.label;
+        tag.style.fontSize = 24 / z + "px"; tag.style.padding = `${8 / z}px ${16 / z}px`; tag.style.borderRadius = 10 / z + "px";
+        marks.appendChild(tag);
+        const above = e.side ? e.side === "top" : (b.y - panY) > info.vh * .35;
+        const tw = tag.offsetWidth, th = tag.offsetHeight;
+        const x = clamp((b.x + b.w / 2) * s - tw / 2, 8, vw - tw - 8);
+        const y = above ? (b.y - p) * s - th - 14 / z : (b.y + b.h + p) * s + 14 / z;
+        Object.assign(tag.style, { left: x + "px", top: y + "px", opacity: k, transform: `translateY(${(1 - k) * (above ? 10 : -10)}px)` });
+        if (e.dim) { ring.style.zIndex = 3; tag.style.zIndex = 3; }
+      }
+      if (e.dim) {
+        // cut the highlighted box out of the dim layer
+        ring.style.boxShadow = `0 0 0 9999px rgba(8,10,14,${.5 * k})`;
+      }
+    }
+
+    // Typing into a field: {do:"type", box, text, dur, color, size, bg}
+    for (const e of sc.events) if (e.do === "type" && t >= e.t) {
+      const end = e.dur !== undefined ? e.t + e.dur : sc.dur;
+      if (t > end) continue;
+      const b = box(e.box, e.t), d = e.typeDur ?? Math.max(.6, e.text.length * .06);
+      const n = Math.round(e.text.length * clamp((t - e.t) / d));
+      const el = document.createElement("div"); el.className = "typed";
+      // Covers the field (and its placeholder) with its own background, inset past the border.
+      const inset = (e.inset ?? 2) * s, padX = (e.padX ?? 14) * s - inset;
+      Object.assign(el.style, { left: b.x * s + inset + "px", top: b.y * s + inset + "px", width: b.w * s - inset * 2 + "px", height: b.h * s - inset * 2 + "px",
+        paddingLeft: padX + "px", borderRadius: (e.radius ?? 8) * s + "px",
+        fontSize: (e.size ?? Math.round(b.h * .42)) * s + "px", color: e.color ?? "#111", background: e.bg ?? "#fff", fontFamily: e.font ?? "inherit" });
+      const blink = Math.floor((t - e.t) * 2.2) % 2 === 0 || n < e.text.length;
+      el.innerHTML = esc(e.text.slice(0, n)) + (blink ? '<span class="caret"></span>' : "");
+      marks.appendChild(el);
+    }
+
+    // Cursor: moves to targets of {do:"cursor", to} and {do:"click", on}; clicks leave a ripple.
+    const cur0 = sc.cursorFrom ?? [info.w * .62, info.vh * .78 + panY];
+    let pos = [...cur0], visible = !!sc.cursorFrom, press = 0;
+    for (const e of sc.events) {
+      if (e.do !== "cursor" && !(e.do === "click" && e.on !== undefined)) continue;
+      const d = e.move ?? .7, start = e.do === "click" ? e.t - d : e.t;
+      if (t < start) break;
+      const target = center(box(e.do === "click" ? e.on : e.to, start));
+      const k = ease(ramp(t, start, d));
+      const arc = Math.sin(Math.PI * k) * Math.min(60, Math.hypot(target[0] - pos[0], target[1] - pos[1]) * .12);
+      const from = pos;
+      pos = [lerp(from[0], target[0], k), lerp(from[1], target[1], k) - arc];
+      visible = true;
+    }
+    for (const e of sc.events) if (e.do === "click" && t >= e.t && t < e.t + .6) {
+      const k = (t - e.t) / .6;
+      press = Math.max(press, 1 - Math.abs(k * 3 - .5) * 2);
+      const r = document.createElement("div"); r.className = "ripple";
+      const size = lerp(10, 70, out(k));
+      const at = e.on !== undefined ? center(box(e.on, e.t)) : pos;
+      Object.assign(r.style, { left: at[0] * s - size / 2 + "px", top: at[1] * s - size / 2 + "px", width: size + "px", height: size + "px", opacity: 1 - k });
+      marks.appendChild(r);
+    }
+    const c = $("#cursor");
+    c.style.display = visible && !sc.hideCursor ? "block" : "none";
+    c.style.transform = `translate(${pos[0] * s - 3}px, ${pos[1] * s - 3}px) scale(${(1 - .15 * clamp(press)) / Math.sqrt(z)})`;
+  }
+
+  // ---------- frame ----------
+  function draw(t) {
+    t = clamp(t, 0, T.total - 1e-6);
+    const i = Math.max(0, scenes.findLastIndex((s) => t >= s.start));
+    const sc = scenes[i], lt = t - sc.start, next = scenes[i + 1], prev = scenes[i - 1];
+    document.querySelectorAll(".card").forEach((c) => (c.style.display = "none"));
+    $("#code").hidden = true; $("#win").hidden = true;
+
+    // Scene fades. Consecutive screen scenes share the window: only its content changes.
+    const keepIn = prev && prev.type === "screen" && sc.type === "screen";
+    const keepOut = next && next.type === "screen" && sc.type === "screen";
+    const kin = i === 0 || keepIn ? 1 : out(ramp(lt, 0, IN));
+    const kout = !next || keepOut ? 1 : 1 - ramp(lt, sc.dur - OUT, OUT);
+    const k = Math.min(kin, kout);
+
+    let el;
+    if (sc.type === "title" || sc.type === "recap") { drawCard(sc, lt, i === 0); el = $(`.card[data-id="${sc.id}"]`); }
+    else if (sc.type === "code") { drawCode(sc, lt); el = $("#code"); }
+    else if (sc.type === "screen") { drawScreen(sc, lt); el = $("#win"); }
+    if (el) { el.style.opacity = k; el.style.transform = sc.type === "screen" || sc.type === "code" ? `scale(${lerp(.97, 1, k)})` : ""; }
+
+    // Top bar
+    const stepEl = $("#step");
+    $("#series .text").innerHTML = E.series ? `${esc(E.series)} · <b>${esc(E.episodeLabel ?? E.title)}</b>` : `<b>${esc(E.title)}</b>`;
+    const onCard = sc.type === "title";
+    $("#top").style.opacity = onCard ? 0 : (i > 0 && scenes[i - 1].type === "title" ? out(ramp(lt, 0, .5)) : 1);
+    if (sc.step) {
+      const n = scenes.filter((s) => s.step).findIndex((s) => s.id === sc.id) + 1;
+      const total = scenes.filter((s) => s.step).length;
+      stepEl.innerHTML = `<span class="n">${n} / ${total}</span><span>${esc(sc.step)}</span>`;
+      stepEl.style.opacity = prev?.step === sc.step ? 1 : out(ramp(lt, 0, .4));
+    } else stepEl.style.opacity = 0;
+
+    // Subtitles: the current narration line.
+    const line = sc.lines.find((l) => lt >= l.start && lt < l.start + l.dur + .2);
+    const subs = $("#subs span");
+    if (line && E.subtitles !== false) {
+      subs.textContent = line.text; subs.style.display = "inline";
+      subs.style.opacity = Math.min(out(ramp(lt, line.start, .15)), 1 - ramp(lt, line.start + line.dur + .05, .15));
+    } else subs.style.display = "none";
+  }
+
+  window.__ready = load().then(() => {
+    const t = parseFloat(new URLSearchParams(location.search).get("t") ?? "0");
+    draw(t);
+  });
+  window.__seek = (t) => draw(t);
+})();
+</script>
+</body>
+</html>

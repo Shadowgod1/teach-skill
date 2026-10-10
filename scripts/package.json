@@ -1,0 +1,15 @@
+{
+  "name": "teach-scripts",
+  "private": true,
+  "type": "module",
+  "description": "Capture and render helpers for the /teach skill",
+  "dependencies": {
+    "@fontsource/inter": "^5.1.0",
+    "@fontsource/jetbrains-mono": "^5.1.0",
+    "@highlightjs/cdn-assets": "^11.10.0",
+    "playwright-core": "^1.48.0"
+  },
+  "optionalDependencies": {
+    "ffmpeg-static": "^5.2.0"
+  }
+}

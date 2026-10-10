@@ -1,0 +1,16 @@
+{
+  "baseUrl": "http://127.0.0.1:5173",
+  "viewport": { "w": 1600, "h": 900 },
+  "steps": [
+    { "goto": "/" },
+    { "shot": "home", "boxes": { "title": "#title", "add": "#add", "list": "#list", "first": "li >> nth=0" } },
+    { "fill": ["#title", "Купить молоко"] },
+    { "shot": "typed", "boxes": { "add": "#add" } },
+    { "click": "#add" },
+    { "shot": "added", "boxes": { "new": "li >> nth=2", "check": "li >> nth=2 >> input", "done": "button[data-f=done]", "active": "button[data-f=active]" } },
+    { "click": "li >> nth=2 >> input" },
+    { "shot": "checked", "boxes": { "done": "button[data-f=done]", "row": "li >> nth=2" } },
+    { "click": "button[data-f=done]" },
+    { "shot": "filtered", "boxes": { "list": "#list", "done": "button[data-f=done]" } }
+  ]
+}
