@@ -49,6 +49,10 @@ SCENE_TAIL = 0.6   # silence after the last line of a scene
 
 VOICEBOX_RATE = 24000      # Qwen3-TTS output rate; every line is brought to it
 VOICEBOX_LINE_TIMEOUT = 900  # seconds; a CPU-only machine needs ~1 min per 10 s of speech
+# Qwen3-TTS stops at full volume on the last sound, which reads as a word cut in half; a fade
+# and a breath of silence after every sentence fix that. Longer fades eat the last syllable, so the
+# pause comes from the padding. Rumble below 70 Hz is room noise copied from the sample.
+VOICEBOX_POLISH = "highpass=f=70,afade=t=in:d=0.01,areverse,afade=t=in:d=0.12,areverse,apad=pad_dur=0.45"
 
 
 def voice_files(name: str) -> Path:
@@ -120,12 +124,25 @@ class Voicebox:
             sys.exit(f"Voicebox {path} failed: {e.code} {e.read().decode('utf-8', 'replace')}")
 
     def synthesize(self, text: str, path: Path) -> bool:
-        """Write the line to path as 16-bit mono WAV; return False when the cached file was reused."""
-        key = hashlib.sha256(json.dumps([self.voice_key, text, self.seed, self.speed],
+        """Write the line to path as 16-bit mono WAV; return False when the cached voice was reused.
+
+        The raw Voicebox output is cached next to the line (<line>.raw.wav), so changing the
+        post-processing only re-runs ffmpeg, not the slow generation."""
+        key = hashlib.sha256(json.dumps([self.voice_key, text, self.seed],
                                         ensure_ascii=False).encode("utf-8")).hexdigest()
         stamp = path.with_suffix(".key")
-        if path.exists() and stamp.exists() and stamp.read_text() == key:
-            return False
+        raw = path.with_suffix(".raw.wav")
+        fresh = not (raw.exists() and stamp.exists() and stamp.read_text() == key)
+        if fresh:
+            self.generate(text, raw)
+            stamp.write_text(key)
+        tempo = f"atempo={self.speed}," if self.speed != 1.0 else ""
+        subprocess.run([self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(raw),
+                        "-af", tempo + VOICEBOX_POLISH, "-ac", "1", "-ar", str(VOICEBOX_RATE),
+                        "-sample_fmt", "s16", str(path)], check=True)
+        return fresh
+
+    def generate(self, text: str, raw: Path) -> None:
         gen = self.post("/generate", {"profile_id": self.profile["id"], "text": text, "language": "ru",
                                       "engine": "qwen", "model_size": "1.7B", "seed": self.seed})
         deadline = time.time() + VOICEBOX_LINE_TIMEOUT
@@ -138,15 +155,8 @@ class Voicebox:
             if time.time() > deadline:
                 sys.exit(f"Voicebox took longer than {VOICEBOX_LINE_TIMEOUT} s on «{text}»")
             time.sleep(2)
-        raw = path.with_suffix(".raw.wav")
         with urllib.request.urlopen(f"{self.url}/audio/{urllib.parse.quote(gen['id'])}", timeout=60) as r:
             raw.write_bytes(r.read())
-        tempo = ["-af", f"atempo={self.speed}"] if self.speed != 1.0 else []
-        subprocess.run([self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(raw), *tempo,
-                        "-ac", "1", "-ar", str(VOICEBOX_RATE), "-sample_fmt", "s16", str(path)], check=True)
-        raw.unlink()
-        stamp.write_text(key)
-        return True
 
 
 def main() -> None:
