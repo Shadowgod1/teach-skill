@@ -27,8 +27,10 @@ A line is {"say": "text to speak", "sub": "optional subtitle text", "pause": 0.3
 """
 
 import argparse
+import array
 import hashlib
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -49,10 +51,17 @@ SCENE_TAIL = 0.6   # silence after the last line of a scene
 
 VOICEBOX_RATE = 24000      # Qwen3-TTS output rate; every line is brought to it
 VOICEBOX_LINE_TIMEOUT = 900  # seconds; a CPU-only machine needs ~1 min per 10 s of speech
-# Qwen3-TTS stops at full volume on the last sound, which reads as a word cut in half; a fade
-# and a breath of silence after every sentence fix that. Longer fades eat the last syllable, so the
-# pause comes from the padding. Rumble below 70 Hz is room noise copied from the sample.
-VOICEBOX_POLISH = "highpass=f=70,afade=t=in:d=0.01,areverse,afade=t=in:d=0.12,areverse,apad=pad_dur=0.45"
+# Qwen3-TTS clips the last syllable of whatever it says last. So every line is voiced with a
+# throwaway word after it ("Дальше."): the real sentence then ends with a natural fall, and the
+# throwaway word is cut off in the last pause, the one followed by exactly one word of speech.
+VOICEBOX_TAIL_WORD = "Дальше."
+VOICEBOX_TAIL_QUIET_DB = -36        # 60 ms average below this is a pause
+VOICEBOX_TAIL_GAP = 0.08            # shortest pause before the tail word, s
+VOICEBOX_TAIL_WORD_DUR = (0.25, 1.1)  # how long the tail word itself may last, s
+VOICEBOX_MIN_SEC_PER_CHAR = 0.04    # less audio than this per character means the cut ate the sentence
+# A short fade, a breath of silence after every sentence, and no rumble below 70 Hz (room noise
+# copied from the voice sample).
+VOICEBOX_POLISH = "highpass=f=70,afade=t=in:d=0.01,areverse,afade=t=in:d=0.06,areverse,apad=pad_dur=0.45"
 
 
 def voice_files(name: str) -> Path:
@@ -69,6 +78,45 @@ def voice_files(name: str) -> Path:
         print(f"downloading {url}", file=sys.stderr)
         urllib.request.urlretrieve(url, path)
     return model
+
+
+def cut_tail_word(path: Path, text: str) -> bool:
+    """Cut a 16-bit mono WAV in the middle of the pause before the throwaway word at its end.
+
+    Returns False (and leaves the file alone) when no pause is followed by exactly one word,
+    or when what is left is too short to hold the whole line."""
+    with wave.open(str(path), "rb") as wav:
+        rate, pcm = wav.getframerate(), array.array("h", wav.readframes(wav.getnframes()))
+    win = int(0.02 * rate)
+    db = [20 * math.log10(max(math.sqrt(sum(v * v for v in pcm[i:i + win]) / win), 1) / 32768)
+          for i in range(0, len(pcm) - win, win)]
+    level = [sum(db[max(0, i - 1):i + 2]) / len(db[max(0, i - 1):i + 2]) for i in range(len(db))]
+    quiet = lambda i: level[i] < VOICEBOX_TAIL_QUIET_DB
+    end = len(level)
+    while end > 1 and quiet(end - 1):  # silence after the tail word
+        end -= 1
+    i, cut = end - 1, None
+    while i > 0 and cut is None:  # walk back over the tail word to the first real pause
+        if not quiet(i):
+            i -= 1
+            continue
+        j = i
+        while j > 0 and quiet(j):
+            j -= 1
+        word = (end - 1 - i) * 0.02
+        if word > VOICEBOX_TAIL_WORD_DUR[1]:
+            return False
+        if (i - j) * 0.02 >= VOICEBOX_TAIL_GAP and word >= VOICEBOX_TAIL_WORD_DUR[0]:
+            cut = (j + 1 + (i - j) // 2) * win
+        i = j
+    if cut is None or cut / rate < VOICEBOX_MIN_SEC_PER_CHAR * len(text):
+        return False
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(rate)
+        wav.writeframes(pcm[:cut].tobytes())
+    return True
 
 
 def ffmpeg_exe() -> str:
@@ -128,13 +176,16 @@ class Voicebox:
 
         The raw Voicebox output is cached next to the line (<line>.raw.wav), so changing the
         post-processing only re-runs ffmpeg, not the slow generation."""
-        key = hashlib.sha256(json.dumps([self.voice_key, text, self.seed],
+        key = hashlib.sha256(json.dumps([self.voice_key, text, self.seed, VOICEBOX_TAIL_WORD, "last-pause"],
                                         ensure_ascii=False).encode("utf-8")).hexdigest()
         stamp = path.with_suffix(".key")
         raw = path.with_suffix(".raw.wav")
         fresh = not (raw.exists() and stamp.exists() and stamp.read_text() == key)
         if fresh:
-            self.generate(text, raw)
+            self.generate(text.rstrip(" ,;:—-") + ("" if text.rstrip()[-1:] in ".!?…" else ".") + " " + VOICEBOX_TAIL_WORD, raw)
+            if not cut_tail_word(raw, text):
+                print(f"  no pause before the tail word in {path.name}, voicing it plain", file=sys.stderr)
+                self.generate(text, raw)
             stamp.write_text(key)
         tempo = f"atempo={self.speed}," if self.speed != 1.0 else ""
         subprocess.run([self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(raw),
