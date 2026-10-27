@@ -1,5 +1,6 @@
 // Checks that this machine can make /teach videos and says how to fix what's missing.
 //   node doctor.mjs
+//   node doctor.mjs --voice "voicebox:<profile name>"   check the Voicebox app instead of Piper
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -39,18 +40,43 @@ if (!ff) {
 }
 ff ? ok("ffmpeg", ff) : bad("ffmpeg", "apt-get install ffmpeg, npm i ffmpeg-static, or pip install imageio-ffmpeg");
 
+const voiceArg = process.argv.indexOf("--voice");
+const voiceOpt = voiceArg > 0 ? process.argv[voiceArg + 1] ?? "" : "";
+const voicebox = voiceOpt.startsWith("voicebox:") ? voiceOpt.slice("voicebox:".length).trim() : null;
+
 const py = ["python3", "python"].find((p) => run(p, ["--version"]).status === 0);
 if (!py) bad("python", "python 3.9+ is needed for narration");
 else {
   ok("python", run(py, ["--version"]).stdout.trim());
-  run(py, ["-c", "import piper"]).status === 0
-    ? ok("piper-tts", "installed")
-    : bad("piper-tts", `run: ${py} -m pip install piper-tts  (or use uv run --with piper-tts)`);
+  if (!voicebox) {
+    run(py, ["-c", "import piper"]).status === 0
+      ? ok("piper-tts", "installed")
+      : bad("piper-tts", `run: ${py} -m pip install piper-tts  (or use uv run --with piper-tts)`);
+  }
 }
 
 const cache = path.join(os.homedir(), ".cache", "teach", "voices");
 const cached = fs.existsSync(cache) ? fs.readdirSync(cache).filter((f) => f.endsWith(".onnx")) : [];
-if (cached.length) ok("voice", `cached: ${cached.join(", ")}`);
+if (voicebox) {
+  const url = (process.env.VOICEBOX_URL || "http://127.0.0.1:17493").replace(/\/$/, "");
+  const get = async (p) => (await fetch(url + p, { signal: AbortSignal.timeout(8000) })).json();
+  try {
+    const health = await get("/health");
+    ok("voicebox", `${url}, ${health.backend_variant}${health.backend_variant === "cpu" ? " (about a minute per 10 s of speech)" : ""}`);
+    const { models } = await get("/models/status");
+    models.find((m) => m.model_name === "qwen-tts-1.7B")?.downloaded
+      ? ok("qwen-tts", "1.7B downloaded")
+      : bad("qwen-tts", "download Qwen TTS 1.7B in Voicebox > Models (~4 GB)");
+    const profiles = await get("/profiles");
+    const hit = profiles.filter((p) => p.name === voicebox || p.id === voicebox
+      || p.name.toLowerCase().startsWith(voicebox.toLowerCase()));
+    hit.length === 1
+      ? ok("profile", `«${hit[0].name}»`)
+      : bad("profile", `«${voicebox}» ${hit.length ? "is ambiguous" : "not found"}; profiles: ${profiles.map((p) => `«${p.name}»`).join(", ") || "none"}`);
+  } catch {
+    bad("voicebox", `no answer at ${url}: start the Voicebox app (its server takes ~20 s) or set VOICEBOX_URL`);
+  }
+} else if (cached.length) ok("voice", `cached: ${cached.join(", ")}`);
 else {
   try {
     const r = await fetch("https://huggingface.co/rhasspy/piper-voices/resolve/main/voices.json", { method: "HEAD", signal: AbortSignal.timeout(8000) });

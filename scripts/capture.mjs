@@ -19,13 +19,22 @@
 //     { "eval": "localStorage.clear()" },
 //     { "scroll": 600 },                          // or { "scroll": "#section" }
 //     { "shot": "tasks-one", "boxes": { "row": "li >> nth=0" } },
-//     { "shot": "landing", "fullPage": true }      // tall page; the player can pan over it
+//     { "shot": "landing", "fullPage": true },     // tall page; the player can pan over it
+//     { "drag": [".card >> nth=0", ".column >> nth=2"], "at": { "x": 40, "y": 420 } },  // drag and drop;
+//                                                 // "at" is the drop point inside the target box
+//     { "routes": { "**/api/tasks": { "json": [] } } }      // swap fixtures mid-scenario
 //   ],
 //   "routes": {                                   // optional: answer API calls with fixtures
+//     "**/api/**": { "json": [] },                // catch-all first: later patterns win
 //     "**/api/tasks": { "json": [{ "id": 1, "title": "Купить молоко" }] },
 //     "**/api/me": { "status": 200, "json": { "name": "Анна" } }
-//   }
+//   },
+//   "localStorage": { "token": "demo" }           // optional: set before any page script runs
 // }
+//
+// When several patterns match a request, the one registered last answers, so a "routes" step
+// overrides earlier fixtures (e.g. the list after "Save" now contains the new item).
+// localStorage values that are not strings are stored as JSON.
 //
 // Writes <out-dir>/<shot>.png and <out-dir>/boxes.json:
 //   { "<shot>": { "w": 1600, "h": 900, "boxes": { "<key>": { "x", "y", "w", "h" } } } }
@@ -51,14 +60,22 @@ const context = await browser.newContext({
   locale: scenario.locale ?? "ru-RU",
   reducedMotion: "reduce",
 });
-for (const [pattern, reply] of Object.entries(scenario.routes ?? {}))
-  await context.route(pattern, (route) =>
-    route.fulfill({
-      status: reply.status ?? 200,
-      contentType: reply.json !== undefined ? "application/json" : reply.contentType ?? "text/plain",
-      body: reply.json !== undefined ? JSON.stringify(reply.json) : reply.body ?? "",
-    }),
-  );
+async function addRoutes(routes) {
+  for (const [pattern, reply] of Object.entries(routes ?? {}))
+    await context.route(pattern, (route) =>
+      route.fulfill({
+        status: reply.status ?? 200,
+        contentType: reply.json !== undefined ? "application/json" : reply.contentType ?? "text/plain",
+        body: reply.json !== undefined ? JSON.stringify(reply.json) : reply.body ?? "",
+      }),
+    );
+}
+await addRoutes(scenario.routes);
+if (scenario.localStorage)
+  await context.addInitScript((items) => {
+    for (const [k, v] of Object.entries(items))
+      localStorage.setItem(k, typeof v === "string" ? v : JSON.stringify(v));
+  }, scenario.localStorage);
 const page = await context.newPage();
 page.setDefaultTimeout(scenario.timeout ?? 15000);
 
@@ -89,6 +106,9 @@ for (const [i, step] of scenario.steps.entries()) {
     else if (step.waitFor) await page.waitForSelector(step.waitFor);
     else if (step.wait) await page.waitForTimeout(step.wait);
     else if (step.eval) await page.evaluate(step.eval);
+    else if (step.drag)
+      await page.dragAndDrop(step.drag[0], step.drag[1], step.at ? { targetPosition: step.at } : {});
+    else if (step.routes) await addRoutes(step.routes);
     else if (step.scroll !== undefined) {
       if (typeof step.scroll === "number") await page.evaluate((y) => window.scrollTo(0, y), step.scroll);
       else await page.locator(step.scroll).scrollIntoViewIfNeeded();
