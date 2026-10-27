@@ -25,7 +25,7 @@ description: Превращает проект (код в папке, zip или
 |---|---|
 | `--audience user\|dev` | `user`: как пользоваться. `dev`: как устроено, больше сцен с кодом |
 | `--voice dmitri\|irina\|denis\|ruslan\|none` | `dmitri`. `none`: без голоса, только субтитры |
-| `--voice voicebox:<профиль>` | клонированный голос из Voicebox, например `voicebox:Бауыржан`. См. [references/voicebox.md](references/voicebox.md) |
+| `--voice voicebox:<профиль>` | клонированный голос из Voicebox, например `voicebox:Диктор`. См. [references/voicebox.md](references/voicebox.md) |
 | `--speed <x>` | `1.0`; 1.1 быстрее, 0.9 медленнее |
 | `--format landscape\|vertical` | `landscape` 1920×1080 30fps; vertical 1080×1920 для Shorts/Reels |
 
