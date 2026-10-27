@@ -162,7 +162,14 @@ if (opt("serve")) {
     if (!opt("chunks-only")) {
       const listFile = path.join(chunks, "list.txt");
       fs.writeFileSync(listFile, list.map((f) => `file '${path.basename(f)}'`).join("\n"));
-      const audio = path.join(dir, "narration.wav");
+      // soundtrack.wav (voice + music from music.py) wins, unless the voice was re-done after it.
+      const voice = path.join(dir, "narration.wav");
+      const mixed = path.join(dir, "soundtrack.wav");
+      let audio = voice;
+      if (fs.existsSync(mixed)) {
+        if (!fs.existsSync(voice) || fs.statSync(mixed).mtimeMs >= fs.statSync(voice).mtimeMs) audio = mixed;
+        else console.warn("soundtrack.wav is older than narration.wav: using the voice only; re-run music.py");
+      }
       const outFile = path.join(dir, "video.mp4");
       const mux = spawnSync(ff, ["-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", listFile,
         ...(fs.existsSync(audio) ? ["-i", audio, "-c:a", "aac", "-b:a", "192k", "-ar", "48000"] : []),

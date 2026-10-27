@@ -28,6 +28,16 @@ git clone https://github.com/Shadowgod1/teach-skill ~/.claude/skills/teach
 
 В claude.ai приложи проект zip-архивом или дай ссылку на публичный репозиторий.
 
+### Свой голос через Voicebox
+
+В Claude Code уроки может озвучивать клонированный голос из локального приложения [Voicebox](https://github.com/jamiepine/voicebox):
+
+```text
+/teach 2 --voice "voicebox:Мой голос"
+```
+
+Нужны запущенный Voicebox, модель Qwen TTS 1.7B и голосовой профиль. Как записать хороший образец и сколько займёт озвучка, описано в [references/voicebox.md](references/voicebox.md). Клонировать можно только свой голос или голос человека, который на это согласился.
+
 ## Как устроено
 
 | Файл | Роль |
@@ -35,7 +45,7 @@ git clone https://github.com/Shadowgod1/teach-skill ~/.claude/skills/teach
 | `SKILL.md` | процесс: разбор → план серии → сценарий → съёмка → голос → проверка кадров → рендер |
 | `references/` | правила нарезки уроков, формат `episode.json`, правила озвучки, рабочий пример |
 | `scripts/capture.mjs` | Playwright проходит сценарий в приложении и снимает состояния и координаты элементов |
-| `scripts/tts.py` | озвучка Piper (офлайн; голоса dmitri, irina, denis, ruslan) → `narration.wav`, `timeline.json`, `.srt` |
+| `scripts/tts.py` | озвучка Piper (офлайн; голоса dmitri, irina, denis, ruslan) или клонированным голосом из Voicebox, с кэшем реплик → `narration.wav`, `timeline.json`, `.srt` |
 | `assets/player.html` | плеер, в котором каждый кадр — чистая функция времени |
 | `scripts/render.mjs` | покадровый рендер кусками (с продолжением после обрыва) + ffmpeg |
 | `scripts/doctor.mjs` | проверка окружения с подсказками, как исправить |

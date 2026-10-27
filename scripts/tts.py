@@ -1,7 +1,7 @@
 """Narration for one /teach episode.
 
-Reads episode.json, synthesizes every line with Piper (offline neural TTS),
-lays the lines out on one timeline and writes:
+Reads episode.json, synthesizes every line with Piper (offline neural TTS) or with
+a cloned voice from a local Voicebox app, lays the lines out on one timeline and writes:
 
   <out>/narration.wav   the full voice track, exactly as long as the video
   <out>/timeline.json   scene and line start/duration in seconds (read by the player)
@@ -9,11 +9,17 @@ lays the lines out on one timeline and writes:
 
 Usage:
   python3 tts.py <episode.json> <out-dir> [--voice dmitri|irina|denis|ruslan] [--speed 1.0]
+  python3 tts.py <episode.json> <out-dir> --voice "voicebox:<profile name>" [--seed 42]
   python3 tts.py <episode.json> <out-dir> --no-voice     # silent track, lines timed for reading
 
-Needs `pip install piper-tts` (or: uv run --no-project --with piper-tts python tts.py ...).
+Piper needs `pip install piper-tts` (or: uv run --no-project --with piper-tts python tts.py ...).
 The voice model is downloaded once from huggingface.co into ~/.cache/teach/voices;
 --model <path.onnx> uses a model file you already have (its .onnx.json must sit next to it).
+
+Voicebox (https://github.com/jamiepine/voicebox) must be running; its server listens on
+http://127.0.0.1:17493 (override with --voicebox-url or VOICEBOX_URL). Every line is generated
+by Qwen3-TTS in the given voice profile and cached in lines/: a rerun only regenerates lines
+whose text, voice, seed or speed changed. Needs ffmpeg to bring lines to one sample format.
 
 A line is {"say": "text to speak", "sub": "optional subtitle text", "pause": 0.35}.
 "say" is what the voice reads (write English terms the way they are pronounced),
@@ -21,8 +27,17 @@ A line is {"say": "text to speak", "sub": "optional subtitle text", "pause": 0.3
 """
 
 import argparse
+import array
+import hashlib
 import json
+import math
+import os
+import shutil
+import subprocess
 import sys
+import time
+import urllib.error
+import urllib.parse
 import urllib.request
 import wave
 from pathlib import Path
@@ -30,9 +45,23 @@ from pathlib import Path
 VOICES_URL = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
 CACHE = Path.home() / ".cache" / "teach" / "voices"
 
-LEAD_IN = 0.5      # silence before the first line of a scene
+LEAD_IN = 0.35    # silence before the first line of a scene
 LINE_GAP = 0.35    # default pause after a line
-SCENE_TAIL = 0.6   # silence after the last line of a scene
+SCENE_TAIL = 0.4  # silence after the last line of a scene
+
+VOICEBOX_RATE = 24000      # Qwen3-TTS output rate; every line is brought to it
+VOICEBOX_LINE_TIMEOUT = 900  # seconds; a CPU-only machine needs ~1 min per 10 s of speech
+# Qwen3-TTS clips the last syllable of whatever it says last. So every line is voiced with a
+# throwaway word after it ("Дальше."): the real sentence then ends with a natural fall, and the
+# throwaway word is cut off in the last pause, the one followed by exactly one word of speech.
+VOICEBOX_TAIL_WORD = "Дальше."
+VOICEBOX_TAIL_QUIET_DB = -36        # 60 ms average below this is a pause
+VOICEBOX_TAIL_GAP = 0.08            # shortest pause before the tail word, s
+VOICEBOX_TAIL_WORD_DUR = (0.25, 1.1)  # how long the tail word itself may last, s
+VOICEBOX_MIN_SEC_PER_CHAR = 0.04    # less audio than this per character means the cut ate the sentence
+# A short fade, a breath of silence after every sentence, and no rumble below 70 Hz (room noise
+# copied from the voice sample).
+VOICEBOX_POLISH = "highpass=f=70,afade=t=in:d=0.01,areverse,afade=t=in:d=0.06,areverse,apad=pad_dur=0.25"
 
 
 def voice_files(name: str) -> Path:
@@ -51,22 +80,162 @@ def voice_files(name: str) -> Path:
     return model
 
 
+def cut_tail_word(path: Path, text: str) -> bool:
+    """Cut a 16-bit mono WAV in the middle of the pause before the throwaway word at its end.
+
+    Returns False (and leaves the file alone) when no pause is followed by exactly one word,
+    or when what is left is too short to hold the whole line."""
+    with wave.open(str(path), "rb") as wav:
+        rate, pcm = wav.getframerate(), array.array("h", wav.readframes(wav.getnframes()))
+    win = int(0.02 * rate)
+    db = [20 * math.log10(max(math.sqrt(sum(v * v for v in pcm[i:i + win]) / win), 1) / 32768)
+          for i in range(0, len(pcm) - win, win)]
+    level = [sum(db[max(0, i - 1):i + 2]) / len(db[max(0, i - 1):i + 2]) for i in range(len(db))]
+    quiet = lambda i: level[i] < VOICEBOX_TAIL_QUIET_DB
+    end = len(level)
+    while end > 1 and quiet(end - 1):  # silence after the tail word
+        end -= 1
+    i, cut = end - 1, None
+    while i > 0 and cut is None:  # walk back over the tail word to the first real pause
+        if not quiet(i):
+            i -= 1
+            continue
+        j = i
+        while j > 0 and quiet(j):
+            j -= 1
+        word = (end - 1 - i) * 0.02
+        if word > VOICEBOX_TAIL_WORD_DUR[1]:
+            return False
+        if (i - j) * 0.02 >= VOICEBOX_TAIL_GAP and word >= VOICEBOX_TAIL_WORD_DUR[0]:
+            cut = (j + 1 + (i - j) // 2) * win
+        i = j
+    if cut is None or cut / rate < VOICEBOX_MIN_SEC_PER_CHAR * len(text):
+        return False
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(rate)
+        wav.writeframes(pcm[:cut].tobytes())
+    return True
+
+
+def ffmpeg_exe() -> str:
+    exe = os.environ.get("FFMPEG") or shutil.which("ffmpeg")
+    if not exe:
+        try:
+            import imageio_ffmpeg
+            exe = imageio_ffmpeg.get_ffmpeg_exe()
+        except ImportError:
+            sys.exit("ffmpeg not found: install it, set FFMPEG, or pip install imageio-ffmpeg")
+    return exe
+
+
+class Voicebox:
+    """Generates lines with a cloned voice through the local Voicebox REST API."""
+
+    def __init__(self, url: str, profile: str, seed: int, speed: float):
+        self.url = url.rstrip("/")
+        self.seed = seed
+        self.speed = speed
+        self.ffmpeg = ffmpeg_exe()
+        try:
+            health = self.get("/health")
+        except OSError:
+            sys.exit(f"Voicebox does not answer at {self.url}. Start the Voicebox app "
+                     "(its server takes ~20 s to come up) or pass --voicebox-url.")
+        profiles = self.get("/profiles")
+        match = [p for p in profiles if profile in (p["id"], p["name"])]
+        if not match:
+            match = [p for p in profiles if p["name"].lower().startswith(profile.lower())]
+        if len(match) != 1:
+            names = ", ".join(f"«{p['name']}»" for p in profiles) or "none"
+            why = "is ambiguous" if match else "not found"
+            sys.exit(f"Voicebox profile «{profile}» {why}. Profiles: {names}")
+        self.profile = match[0]
+        samples = self.get(f"/profiles/{self.profile['id']}/samples")
+        # A changed reference sample changes the voice, so it must invalidate the cache.
+        self.voice_key = [self.profile["id"], sorted(s["id"] for s in samples)]
+        if health.get("backend_variant") == "cpu":
+            print("voicebox: CPU only, expect about a minute per 10 s of speech", file=sys.stderr)
+
+    def get(self, path: str):
+        with urllib.request.urlopen(self.url + path, timeout=30) as r:
+            return json.load(r)
+
+    def post(self, path: str, body: dict):
+        req = urllib.request.Request(self.url + path, data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                                     headers={"Content-Type": "application/json; charset=utf-8"})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            sys.exit(f"Voicebox {path} failed: {e.code} {e.read().decode('utf-8', 'replace')}")
+
+    def synthesize(self, text: str, path: Path) -> bool:
+        """Write the line to path as 16-bit mono WAV; return False when the cached voice was reused.
+
+        The raw Voicebox output is cached next to the line (<line>.raw.wav), so changing the
+        post-processing only re-runs ffmpeg, not the slow generation."""
+        key = hashlib.sha256(json.dumps([self.voice_key, text, self.seed, VOICEBOX_TAIL_WORD, "last-pause"],
+                                        ensure_ascii=False).encode("utf-8")).hexdigest()
+        stamp = path.with_suffix(".key")
+        raw = path.with_suffix(".raw.wav")
+        fresh = not (raw.exists() and stamp.exists() and stamp.read_text() == key)
+        if fresh:
+            self.generate(text.rstrip(" ,;:—-") + ("" if text.rstrip()[-1:] in ".!?…" else ".") + " " + VOICEBOX_TAIL_WORD, raw)
+            if not cut_tail_word(raw, text):
+                print(f"  no pause before the tail word in {path.name}, voicing it plain", file=sys.stderr)
+                self.generate(text, raw)
+            stamp.write_text(key)
+        tempo = f"atempo={self.speed}," if self.speed != 1.0 else ""
+        subprocess.run([self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(raw),
+                        "-af", tempo + VOICEBOX_POLISH, "-ac", "1", "-ar", str(VOICEBOX_RATE),
+                        "-sample_fmt", "s16", str(path)], check=True)
+        return fresh
+
+    def generate(self, text: str, raw: Path) -> None:
+        gen = self.post("/generate", {"profile_id": self.profile["id"], "text": text, "language": "ru",
+                                      "engine": "qwen", "model_size": "1.7B", "seed": self.seed})
+        deadline = time.time() + VOICEBOX_LINE_TIMEOUT
+        while True:
+            state = self.get(f"/history/{gen['id']}")
+            if state["status"] == "completed":
+                break
+            if state["status"] in ("failed", "error", "cancelled"):
+                sys.exit(f"Voicebox could not voice «{text}»: {state.get('error') or state['status']}")
+            if time.time() > deadline:
+                sys.exit(f"Voicebox took longer than {VOICEBOX_LINE_TIMEOUT} s on «{text}»")
+            time.sleep(2)
+        with urllib.request.urlopen(f"{self.url}/audio/{urllib.parse.quote(gen['id'])}", timeout=60) as r:
+            raw.write_bytes(r.read())
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("episode")
     ap.add_argument("out")
-    ap.add_argument("--voice", default="dmitri", help="dmitri, irina, denis, ruslan or a full Piper voice name")
+    ap.add_argument("--voice", default="dmitri",
+                    help="dmitri, irina, denis, ruslan, a full Piper voice name, or voicebox:<profile name>")
     ap.add_argument("--speed", type=float, default=1.0, help=">1 is faster")
     ap.add_argument("--model", help="path to a local Piper .onnx model")
+    ap.add_argument("--voicebox-url", default=os.environ.get("VOICEBOX_URL", "http://127.0.0.1:17493"))
+    ap.add_argument("--seed", type=int, default=42, help="Voicebox seed; keep it fixed for the whole series")
     ap.add_argument("--no-voice", action="store_true", help="no speech, time lines by reading speed")
     args = ap.parse_args()
+    for stream in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code page
+        stream.reconfigure(encoding="utf-8", errors="replace")
 
     episode = json.loads(Path(args.episode).read_text(encoding="utf-8"))
     out = Path(args.out)
     (out / "lines").mkdir(parents=True, exist_ok=True)
 
-    if args.no_voice:
-        voice, rate = None, 22050
+    voice = cloned = None
+    if args.no_voice or args.voice == "none":
+        rate = 22050
+    elif args.voice.startswith("voicebox:"):
+        cloned = Voicebox(args.voicebox_url, args.voice.split(":", 1)[1].strip(), args.seed, args.speed)
+        rate = VOICEBOX_RATE
+        print(f"voicebox: profile «{cloned.profile['name']}»", file=sys.stderr)
     else:
         from piper import PiperVoice, SynthesisConfig
 
@@ -84,16 +253,23 @@ def main() -> None:
 
     timeline = {"scenes": [], "sampleRate": rate}
     srt = []
+    total_lines = sum(len(s.get("lines", [])) for s in episode["scenes"])
+    generated = 0
     for scene in episode["scenes"]:
         start = now()
         entry = {"id": scene["id"], "start": start, "lines": []}
         lines = scene.get("lines", [])
         silence(scene.get("leadIn", LEAD_IN if lines else 0))
         for i, line in enumerate(lines):
-            if voice:
+            if voice or cloned:
                 path = out / "lines" / f"{scene['id']}-{i}.wav"
-                with wave.open(str(path), "wb") as wav:
-                    voice.synthesize_wav(line["say"], wav, syn_config=config)
+                if cloned:
+                    fresh = cloned.synthesize(line["say"], path)
+                    generated += fresh
+                    print(f"  {'voiced' if fresh else 'cached'} {path.name}", file=sys.stderr)
+                else:
+                    with wave.open(str(path), "wb") as wav:
+                        voice.synthesize_wav(line["say"], wav, syn_config=config)
                 with wave.open(str(path), "rb") as wav:
                     frames = wav.readframes(wav.getnframes())
             else:
@@ -131,7 +307,8 @@ def main() -> None:
         "\n".join(f"{i}\n{ts(a)} --> {ts(b)}\n{t}\n" for i, (a, b, t) in enumerate(srt, 1)),
         encoding="utf-8",
     )
-    print(f"narration: {timeline['total']:.1f}s, {len(srt)} lines, {len(timeline['scenes'])} scenes")
+    reuse = f", {generated} voiced, {total_lines - generated} from cache" if cloned else ""
+    print(f"narration: {timeline['total']:.1f}s, {len(srt)} lines, {len(timeline['scenes'])} scenes{reuse}")
 
 
 if __name__ == "__main__":
