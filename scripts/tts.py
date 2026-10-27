@@ -45,9 +45,9 @@ from pathlib import Path
 VOICES_URL = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
 CACHE = Path.home() / ".cache" / "teach" / "voices"
 
-LEAD_IN = 0.5      # silence before the first line of a scene
+LEAD_IN = 0.35    # silence before the first line of a scene
 LINE_GAP = 0.35    # default pause after a line
-SCENE_TAIL = 0.6   # silence after the last line of a scene
+SCENE_TAIL = 0.4  # silence after the last line of a scene
 
 VOICEBOX_RATE = 24000      # Qwen3-TTS output rate; every line is brought to it
 VOICEBOX_LINE_TIMEOUT = 900  # seconds; a CPU-only machine needs ~1 min per 10 s of speech
@@ -61,7 +61,7 @@ VOICEBOX_TAIL_WORD_DUR = (0.25, 1.1)  # how long the tail word itself may last, 
 VOICEBOX_MIN_SEC_PER_CHAR = 0.04    # less audio than this per character means the cut ate the sentence
 # A short fade, a breath of silence after every sentence, and no rumble below 70 Hz (room noise
 # copied from the voice sample).
-VOICEBOX_POLISH = "highpass=f=70,afade=t=in:d=0.01,areverse,afade=t=in:d=0.06,areverse,apad=pad_dur=0.45"
+VOICEBOX_POLISH = "highpass=f=70,afade=t=in:d=0.01,areverse,afade=t=in:d=0.06,areverse,apad=pad_dur=0.25"
 
 
 def voice_files(name: str) -> Path:
