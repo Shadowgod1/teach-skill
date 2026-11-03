@@ -23,21 +23,24 @@ const browser = await launch({ headless: false });
 const context = await browser.newContext({ viewport: null, locale: "ru-RU" });
 const page = await context.newPage();
 await page.goto(url);
-console.log("Войдите в открывшемся окне. Когда приложение откроется, закройте окно.");
+console.log("Войдите в открывшемся окне. После входа окно закроется само.");
 
+// Save once the person has signed in (a cookie appeared and the page left the
+// sign-in form), then close the window: the session must not keep being written.
+const start = Date.now();
 let saved = false;
-const save = async () => {
-  try {
+const loginUrl = page.url();
+while (!saved && Date.now() - start < 10 * 60 * 1000) {
+  await new Promise((r) => setTimeout(r, 1500));
+  if (page.isClosed()) break;
+  const signedIn = (await context.cookies()).length > 0 && !/login|signin|auth/i.test(new URL(page.url()).pathname)
+    && page.url() !== loginUrl.replace(/\/login.*$/, "/login");
+  if (signedIn) {
+    await page.waitForTimeout(2000);
     await context.storageState({ path: outFile });
     saved = true;
-  } catch {}
-};
-const timer = setInterval(save, 1500);
-await new Promise((done) => {
-  page.on("close", done);
-  browser.on("disconnected", done);
-});
-clearInterval(timer);
+  }
+}
 await browser.close().catch(() => {});
-console.log(saved ? `session saved: ${outFile}` : "session was not saved");
+console.log(saved ? `session saved: ${outFile} (delete it when the lesson is done)` : "session was not saved");
 process.exit(saved ? 0 : 1);

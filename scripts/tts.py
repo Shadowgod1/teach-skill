@@ -137,6 +137,7 @@ def main() -> None:
     ap.add_argument("--instruct", help="voicebox: delivery instruction, e.g. calm and friendly")
     ap.add_argument("--seed", type=int, default=7, help="voicebox: a fixed seed keeps the voice steady across lines")
     ap.add_argument("--language", default="ru")
+    ap.add_argument("--max-new", type=int, help="synthesize at most N new lines, then exit with code 3 (run again to continue)")
     args = ap.parse_args()
 
     episode = json.loads(Path(args.episode).read_text(encoding="utf-8"))
@@ -172,6 +173,7 @@ def main() -> None:
         return len(pcm) / 2 / rate
 
     timeline = {"scenes": [], "sampleRate": rate}
+    made = 0
     srt = []
     for scene in episode["scenes"]:
         start = now()
@@ -183,7 +185,16 @@ def main() -> None:
                 digest = hashlib.sha1(f"{key}|{line['say']}".encode()).hexdigest()[:10]
                 path = out / "lines" / f"{scene['id']}-{i}-{digest}.wav"
                 if not path.exists():
-                    synth(line["say"], path)
+                    # Same text and voice already spoken in another scene or a copied lines/ folder
+                    same = next((out / "lines").glob(f"*-{digest}.wav"), None)
+                    if same:
+                        shutil.copyfile(same, path)
+                    else:
+                        if args.max_new is not None and made >= args.max_new:
+                            print(f"made {made} new lines, more left: run again")
+                            sys.exit(3)
+                        synth(line["say"], path)
+                        made += 1
                 with wave.open(str(path), "rb") as wav:
                     if wav.getframerate() != rate or wav.getnchannels() != 1 or wav.getsampwidth() != 2:
                         sys.exit(f"{path}: expected 16-bit mono {rate} Hz")

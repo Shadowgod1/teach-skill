@@ -99,6 +99,7 @@
     color: #111; font-size: 18px; justify-content: center; gap: 8px; }
   #win.phone #url.focus { box-shadow: 0 0 0 3px var(--accent); background: #fff; }
   #url .caret { display: inline-block; width: 2px; height: 1.1em; background: currentColor; }
+  #win.phone.barless #chrome { height: 50px; } #win.phone.barless #url { display: none; }
   #win.phone #view { border-radius: 0 0 calc(48px * var(--ps, 1)) calc(48px * var(--ps, 1)); }
   #side[hidden] { display: none; }
   #side { position: absolute; top: 0; bottom: 0; display: flex; flex-direction: column; justify-content: center; }
@@ -166,6 +167,8 @@
     layout = { pad, top, bottom, chrome, phone };
     if (phone) {
       $("#win").classList.add("phone");
+      // "browserBar": false = installed web app (no address bar) or mockups that draw their own browser
+      if (E.browserBar === false) $("#win").classList.add("barless");
       const bars = '<svg width="18" height="12" viewBox="0 0 18 12"><rect x="0" y="8" width="3" height="4" rx="1" fill="#111"/><rect x="5" y="5" width="3" height="7" rx="1" fill="#111"/><rect x="10" y="2.5" width="3" height="9.5" rx="1" fill="#111"/><rect x="15" y="0" width="3" height="12" rx="1" fill="#111"/></svg>';
       const battery = '<svg width="27" height="13" viewBox="0 0 27 13"><rect x=".5" y=".5" width="23" height="12" rx="3.5" fill="none" stroke="#111" opacity=".4"/><rect x="2" y="2" width="18" height="9" rx="2" fill="#111"/><rect x="25" y="4.5" width="2" height="4" rx="1" fill="#111" opacity=".4"/></svg>';
       $("#chrome").insertAdjacentHTML("afterbegin", `<div class="status"><span>9:41</span><span style="display:flex;gap:6px;align-items:center">${bars}${battery}</span></div>`);
@@ -219,8 +222,8 @@
     const vw = E.viewport?.w ?? 1600, vh = E.viewport?.h ?? 900;
     if (layout.phone) {
       // Fit the whole phone, or with "phoneScale" draw it larger and let it run off the bottom edge.
-      const fit = (H - 88 - 28) / (vh + 102);
-      const s = E.phoneScale ?? fit, bezel = Math.round(14 * s), chrome = 102 * s;
+      const bar = E.browserBar === false ? 50 : 102, fit = (H - 88 - 28) / (vh + bar);
+      const s = E.phoneScale ?? fit, bezel = Math.round(14 * s), chrome = bar * s;
       const w = vw * s + bezel * 2, h = vh * s + chrome + bezel * 2;
       const x = E.phoneX ?? Math.round(W * 0.08);
       return { x, y: 44, w, h, s, chrome, bezel, vx: bezel, vy: bezel + chrome, vw: vw * s, vh: vh * s };
