@@ -30,13 +30,13 @@ function cachedChromium() {
   return null;
 }
 
-export async function launch() {
+export async function launch(options = {}) {
   const own = chromium.executablePath();
   const executablePath = fs.existsSync(own) ? own : cachedChromium();
-  if (executablePath) return chromium.launch({ executablePath });
+  if (executablePath) return chromium.launch({ ...options, executablePath });
   for (const channel of ["chrome", "msedge"]) {
     try {
-      return await chromium.launch({ channel });
+      return await chromium.launch({ ...options, channel });
     } catch {}
   }
   throw new Error("No Chromium found. Run: npx playwright install chromium");

@@ -62,5 +62,13 @@ else {
   }
 }
 
+try {
+  const r = await fetch("http://127.0.0.1:17493/profiles", { signal: AbortSignal.timeout(3000) });
+  const profiles = await r.json();
+  ok("voicebox", `running, profiles: ${profiles.map((p) => p.name).join(", ") || "none yet"}`);
+} catch {
+  rows.push(["--  ", "voicebox", "not running (optional: own cloned voice via --engine voicebox)"]);
+}
+
 for (const [s, n, d] of rows) console.log(`${s}  ${n.padEnd(10)} ${d}`);
 process.exit(rows.some((r) => r[0] === "FAIL") ? 1 : 0);

@@ -21,6 +21,9 @@
 //     { "shot": "tasks-one", "boxes": { "row": "li >> nth=0" } },
 //     { "shot": "landing", "fullPage": true }      // tall page; the player can pan over it
 //   ],
+//   "storageState": "work/auth.json",             // optional: session saved by login.mjs
+//   "mask": ["video", "canvas", "img[alt*=camera]"],  // optional: covered in every screenshot
+//   "maskColor": "#1c2230",
 //   "routes": {                                   // optional: answer API calls with fixtures
 //     "**/api/tasks": { "json": [{ "id": 1, "title": "Купить молоко" }] },
 //     "**/api/me": { "status": 200, "json": { "name": "Анна" } }
@@ -44,8 +47,15 @@ const scenario = JSON.parse(fs.readFileSync(scenarioPath, "utf8"));
 const vp = { width: scenario.viewport?.w ?? 1600, height: scenario.viewport?.h ?? 900 };
 fs.mkdirSync(outDir, { recursive: true });
 
+const here = path.dirname(path.resolve(scenarioPath));
+const storageState = scenario.storageState ? path.resolve(here, scenario.storageState) : undefined;
+if (storageState && !fs.existsSync(storageState)) {
+  console.error(`no session at ${storageState}: run login.mjs first`);
+  process.exit(1);
+}
 const browser = await launch();
 const context = await browser.newContext({
+  storageState,
   viewport: vp,
   deviceScaleFactor: scenario.scale ?? 2,
   locale: scenario.locale ?? "ru-RU",
@@ -64,6 +74,15 @@ page.setDefaultTimeout(scenario.timeout ?? 15000);
 
 const boxesFile = path.join(outDir, "boxes.json");
 const boxes = fs.existsSync(boxesFile) ? JSON.parse(fs.readFileSync(boxesFile, "utf8")) : {};
+
+// Elements listed in "mask" (globally or per shot) are painted over in every screenshot,
+// e.g. live camera video that shows people who must not appear in the lesson.
+function masking(step) {
+  const selectors = [...(scenario.mask ?? []), ...(step.mask ?? [])];
+  return selectors.length
+    ? { mask: selectors.map((s) => page.locator(s)), maskColor: step.maskColor ?? scenario.maskColor ?? "#1c2230" }
+    : {};
+}
 
 async function settle() {
   await page.waitForLoadState("networkidle").catch(() => {});
@@ -96,7 +115,7 @@ for (const [i, step] of scenario.steps.entries()) {
     } else if (step.shot) {
       await settle();
       if (step.fullPage) await page.evaluate(() => window.scrollTo(0, 0));
-      await page.screenshot({ path: path.join(outDir, `${step.shot}.png`), fullPage: !!step.fullPage });
+      await page.screenshot({ path: path.join(outDir, `${step.shot}.png`), fullPage: !!step.fullPage, ...masking(step) });
       const found = {};
       for (const [key, selector] of Object.entries(step.boxes ?? {})) {
         const box = await page.locator(selector).first().boundingBox();
@@ -108,7 +127,7 @@ for (const [i, step] of scenario.steps.entries()) {
       console.log(`shot ${step.shot} (${Object.keys(found).length} boxes)`);
     } else throw new Error("unknown step");
   } catch (err) {
-    await page.screenshot({ path: path.join(outDir, "_error.png") }).catch(() => {});
+    await page.screenshot({ path: path.join(outDir, "_error.png"), ...masking({}) }).catch(() => {});
     console.error(`${label} failed: ${err.message}\nsee ${path.join(outDir, "_error.png")}`);
     fs.writeFileSync(boxesFile, JSON.stringify(boxes, null, 2));
     await browser.close();
