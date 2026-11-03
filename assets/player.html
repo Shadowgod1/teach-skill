@@ -88,6 +88,30 @@
   #code .bar { position: absolute; left: 0; right: 0; background: color-mix(in srgb, var(--accent) 16%, transparent);
     border-left: 4px solid var(--accent); }
 
+  /* phone device ("device": "phone"): the app in a phone, the step written large beside it */
+  #win.phone { border-radius: calc(62px * var(--ps, 1)); background: #0d0f13; box-shadow: 0 40px 100px rgba(0,0,0,.55), 0 0 0 2px #2c313c; }
+  #win.phone #chrome { right: auto; height: 102px; background: #f4f4f6; transform-origin: 0 0;
+    border-radius: 48px 48px 0 0; flex-direction: column; align-items: stretch; gap: 8px; padding: 14px 24px 10px; }
+  #win.phone #chrome i { display: none; }
+  #win.phone .status { display: flex; justify-content: space-between; align-items: center; padding: 0 12px;
+    font-size: 17px; font-weight: 600; color: #111; }
+  #win.phone #url { margin: 0; max-width: none; flex: none; height: 42px; border-radius: 12px; background: #e3e4e9;
+    color: #111; font-size: 18px; justify-content: center; gap: 8px; }
+  #win.phone #url.focus { box-shadow: 0 0 0 3px var(--accent); background: #fff; }
+  #url .caret { display: inline-block; width: 2px; height: 1.1em; background: currentColor; }
+  #win.phone #view { border-radius: 0 0 calc(48px * var(--ps, 1)) calc(48px * var(--ps, 1)); }
+  #side[hidden] { display: none; }
+  #side { position: absolute; top: 0; bottom: 0; display: flex; flex-direction: column; justify-content: center; }
+  #side .sn { align-self: flex-start; font-size: 26px; font-weight: 700; color: var(--bg); background: var(--accent);
+    border-radius: 999px; padding: 8px 22px; margin-bottom: 26px; font-variant-numeric: tabular-nums; }
+  #side .st { font-size: 68px; line-height: 1.06; font-weight: 800; letter-spacing: -.02em; }
+  #side .sh { font-size: 34px; line-height: 1.35; color: var(--muted); margin-top: 22px; }
+  #side .ss { margin-top: 48px; font-size: 38px; line-height: 1.35; font-weight: 500; color: #fff;
+    border-left: 6px solid var(--accent); padding: 6px 0 6px 28px; min-height: 3.2em; }
+  .item .num { flex: none; width: 52px; height: 52px; border-radius: 14px; background: var(--accent);
+    display: grid; place-items: center; font-size: 28px; font-weight: 800; color: #fff; }
+  .item small { display: block; font-size: 30px; font-weight: 500; color: var(--muted); margin-top: 6px; }
+
   /* subtitles */
   #subs { position: absolute; left: 0; right: 0; bottom: 0; height: var(--bottom);
     display: flex; align-items: center; justify-content: center; padding: 0 var(--pad); }
@@ -108,6 +132,7 @@
         fill="#111" stroke="#fff" stroke-width="2.2" stroke-linejoin="round"/></svg></div></div></div>
   </div>
   <div id="top"><div id="series"><span class="dot"></span><span class="text"></span></div><div id="step"></div></div>
+  <div id="side" hidden><div class="sn"></div><div class="st"></div><div class="sh"></div><div class="ss"></div></div>
   <div id="subs"><span></span></div>
 </div>
 <script>
@@ -135,10 +160,16 @@
     stage.style.width = W + "px"; stage.style.height = H + "px";
 
     // Layout: top bar, bottom subtitle band, app window in between.
-    const vertical = H > W;
-    const pad = vertical ? 60 : 100, top = vertical ? 150 : 84, bottom = vertical ? 340 : 160, chrome = 44;
+    const vertical = H > W, phone = E.device === "phone";
+    const pad = vertical ? 60 : 100, top = vertical ? 150 : 84, bottom = vertical ? 340 : 160, chrome = phone ? 104 : 44;
     Object.entries({ pad, top, bottom, chrome }).forEach(([k, v]) => root.setProperty(`--${k}`, v + "px"));
-    layout = { pad, top, bottom, chrome };
+    layout = { pad, top, bottom, chrome, phone };
+    if (phone) {
+      $("#win").classList.add("phone");
+      const bars = '<svg width="18" height="12" viewBox="0 0 18 12"><rect x="0" y="8" width="3" height="4" rx="1" fill="#111"/><rect x="5" y="5" width="3" height="7" rx="1" fill="#111"/><rect x="10" y="2.5" width="3" height="9.5" rx="1" fill="#111"/><rect x="15" y="0" width="3" height="12" rx="1" fill="#111"/></svg>';
+      const battery = '<svg width="27" height="13" viewBox="0 0 27 13"><rect x=".5" y=".5" width="23" height="12" rx="3.5" fill="none" stroke="#111" opacity=".4"/><rect x="2" y="2" width="18" height="9" rx="2" fill="#111"/><rect x="25" y="4.5" width="2" height="4" rx="1" fill="#111" opacity=".4"/></svg>';
+      $("#chrome").insertAdjacentHTML("afterbegin", `<div class="status"><span>9:41</span><span style="display:flex;gap:6px;align-items:center">${bars}${battery}</span></div>`);
+    }
 
     // Merge timing from timeline.json into scenes and resolve event times.
     scenes = E.scenes.map((s, i) => {
@@ -183,12 +214,22 @@
     const b = B[src] ?? {};
     return { w: b.w ?? E.viewport?.w ?? 1600, h: b.h ?? E.viewport?.h ?? 900, vh: E.viewport?.h ?? 900, boxes: b.boxes ?? {} };
   }
+  // The app window and, inside it, the view where the screenshot is drawn.
   function windowRect() {
     const vw = E.viewport?.w ?? 1600, vh = E.viewport?.h ?? 900;
+    if (layout.phone) {
+      // Fit the whole phone, or with "phoneScale" draw it larger and let it run off the bottom edge.
+      const fit = (H - 88 - 28) / (vh + 102);
+      const s = E.phoneScale ?? fit, bezel = Math.round(14 * s), chrome = 102 * s;
+      const w = vw * s + bezel * 2, h = vh * s + chrome + bezel * 2;
+      const x = E.phoneX ?? Math.round(W * 0.08);
+      return { x, y: 44, w, h, s, chrome, bezel, vx: bezel, vy: bezel + chrome, vw: vw * s, vh: vh * s };
+    }
     const maxW = W - layout.pad * 2, maxH = H - layout.top - layout.bottom - layout.chrome;
     const s = Math.min(maxW / vw, maxH / vh);
     const w = vw * s, h = vh * s + layout.chrome;
-    return { x: (W - w) / 2, y: layout.top + (H - layout.top - layout.bottom - h) / 2, w, h, s };
+    return { x: (W - w) / 2, y: layout.top + (H - layout.top - layout.bottom - h) / 2, w, h, s,
+      vx: 0, vy: layout.chrome, vw: w, vh: h - layout.chrome };
   }
 
   // ---------- cards (title / recap) ----------
@@ -203,7 +244,7 @@
         + `<div class="title">${esc(sc.title ?? "")}</div>`
         + (sc.subtitle ? `<div class="subtitle">${esc(sc.subtitle)}</div>` : "")
         + (sc.goals ? `<div class="goals">${sc.goals.map((g) => `<span>${esc(g)}</span>`).join("")}</div>` : "")
-        + (sc.items ? `<div class="items">${sc.items.map((it) => `<div class="item"><span class="check">${check}</span><span>${esc(it.text ?? it)}</span></div>`).join("")}</div>` : "");
+        + (sc.items ? `<div class="items">${sc.items.map((it, n) => `<div class="item">${sc.numbered ? `<span class="num">${n + 1}</span>` : `<span class="check">${check}</span>`}<span>${esc(it.text ?? it)}${it.note ? `<small>${esc(it.note)}</small>` : ""}</span></div>`).join("")}</div>` : "");
       host.appendChild(el);
     }
   }
@@ -275,9 +316,24 @@
     const win = $("#win"); win.hidden = false;
     const R = windowRect();
     Object.assign(win.style, { left: R.x + "px", top: R.y + "px", width: R.w + "px", height: R.h + "px" });
-    const view = $("#view"); view.style.top = layout.chrome + "px";
-    $("#url").textContent = sc.url ?? E.url ?? "";
-    const s = R.s, vw = R.w, vh = R.h - layout.chrome;
+    if (layout.phone) {
+      win.style.setProperty("--ps", R.s);
+      Object.assign($("#chrome").style, { left: R.bezel + "px", top: R.bezel + "px", width: R.vw / R.s + "px", transform: `scale(${R.s})` });
+    }
+    const view = $("#view");
+    Object.assign(view.style, { left: R.vx + "px", top: R.vy + "px", width: R.vw + "px", height: R.vh + "px", right: "auto", bottom: "auto" });
+    const s = R.s, vw = R.vw, vh = R.vh;
+
+    // Address bar; {do:"url", text, typeDur} types a new address into it.
+    const urlEl = $("#url");
+    let url = sc.url ?? E.url ?? "", typing = false;
+    for (const e of sc.events) if (e.do === "url" && t >= e.t) {
+      const d = e.typeDur ?? Math.max(.8, e.text.length * .08), k = clamp((t - e.t) / d);
+      url = e.text.slice(0, Math.round(e.text.length * k)); typing = k < 1 || (e.dur !== undefined && t < e.t + e.dur);
+    }
+    urlEl.innerHTML = (layout.phone && !typing ? '<svg width="12" height="15" viewBox="0 0 12 15"><rect x="1" y="6" width="10" height="8" rx="2" fill="#555"/><path d="M3.5 6V4.2a2.5 2.5 0 0 1 5 0V6" fill="none" stroke="#555" stroke-width="1.6"/></svg>' : "")
+      + `<span>${esc(url)}</span>` + (typing && Math.floor(t * 2.2) % 2 === 0 ? '<span class="caret"></span>' : "");
+    urlEl.classList.toggle("focus", typing);
 
     // Which screenshot is showing, with a short crossfade between states.
     let cur = sc.shot, prev = null, since = -1e9;
@@ -422,10 +478,33 @@
     else if (sc.type === "screen") { drawScreen(sc, lt); el = $("#win"); }
     if (el) { el.style.opacity = k; el.style.transform = sc.type === "screen" || sc.type === "code" ? `scale(${lerp(.97, 1, k)})` : ""; }
 
+    // Phone layout: step, hint and the spoken line sit large beside the phone.
+    const side = $("#side"), sideMode = layout.phone && sc.type === "screen";
+    side.hidden = !sideMode;
+    if (sideMode) {
+      const R = windowRect();
+      Object.assign(side.style, { left: R.x + R.w + 110 + "px", right: layout.pad + "px" });
+      const steps = scenes.filter((s) => s.step), n = steps.findIndex((s) => s.id === sc.id) + 1;
+      side.querySelector(".sn").textContent = sc.step ? `Шаг ${n} из ${steps.length}` : "";
+      side.querySelector(".sn").style.display = sc.step && E.stepNumbers !== false ? "" : "none";
+      side.querySelector(".st").textContent = sc.step ?? "";
+      side.querySelector(".sh").textContent = sc.hint ?? "";
+      const fresh = prev?.step !== sc.step;
+      const kk = fresh ? out(ramp(lt, 0, .45)) : 1;
+      [".sn", ".st", ".sh"].forEach((q, j) => {
+        const el = side.querySelector(q), kj = fresh ? out(ramp(lt, j * .08, .45)) : 1;
+        el.style.opacity = kj * k; el.style.transform = `translateY(${(1 - kj) * 20}px)`;
+      });
+      const ln = sc.lines.find((l) => lt >= l.start && lt < l.start + l.dur + .25);
+      const ss = side.querySelector(".ss");
+      ss.textContent = ln ? ln.text : "";
+      ss.style.opacity = ln ? Math.min(out(ramp(lt, ln.start, .15)), 1 - ramp(lt, ln.start + ln.dur + .1, .15)) * k : 0;
+    }
+
     // Top bar
     const stepEl = $("#step");
     $("#series .text").innerHTML = E.series ? `${esc(E.series)} · <b>${esc(E.episodeLabel ?? E.title)}</b>` : `<b>${esc(E.title)}</b>`;
-    const onCard = sc.type === "title";
+    const onCard = sc.type === "title" || sideMode;
     $("#top").style.opacity = onCard ? 0 : (i > 0 && scenes[i - 1].type === "title" ? out(ramp(lt, 0, .5)) : 1);
     if (sc.step) {
       const n = scenes.filter((s) => s.step).findIndex((s) => s.id === sc.id) + 1;
@@ -433,11 +512,12 @@
       stepEl.innerHTML = `<span class="n">${n} / ${total}</span><span>${esc(sc.step)}</span>`;
       stepEl.style.opacity = prev?.step === sc.step ? 1 : out(ramp(lt, 0, .4));
     } else stepEl.style.opacity = 0;
+    if (sideMode) stepEl.style.opacity = 0;
 
     // Subtitles: the current narration line.
     const line = sc.lines.find((l) => lt >= l.start && lt < l.start + l.dur + .2);
     const subs = $("#subs span");
-    if (line && E.subtitles !== false) {
+    if (line && E.subtitles !== false && !sideMode) {
       subs.textContent = line.text; subs.style.display = "inline";
       subs.style.opacity = Math.min(out(ramp(lt, line.start, .15)), 1 - ramp(lt, line.start + line.dur + .05, .15));
     } else subs.style.display = "none";

@@ -8,6 +8,7 @@
 //   "baseUrl": "http://localhost:5173",
 //   "viewport": { "w": 1600, "h": 900 },        // the app window inside the video
 //   "scale": 2,                                  // device pixel ratio; 2 keeps zooms sharp
+//   "mobile": true,                              // phone: touch, mobile user agent (use a 390x844 viewport)
 //   "steps": [
 //     { "goto": "/tasks" },
 //     { "shot": "tasks-empty", "boxes": { "add": "button:has-text('Добавить')", "title": "#title" } },
@@ -59,6 +60,10 @@ const context = await browser.newContext({
   viewport: vp,
   deviceScaleFactor: scenario.scale ?? 2,
   locale: scenario.locale ?? "ru-RU",
+  ...(scenario.mobile ? {
+    isMobile: true, hasTouch: true,
+    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+  } : {}),
   reducedMotion: "reduce",
 });
 for (const [pattern, reply] of Object.entries(scenario.routes ?? {}))
@@ -100,6 +105,7 @@ for (const [i, step] of scenario.steps.entries()) {
       await page.goto(new URL(step.goto, scenario.baseUrl).href);
       await settle();
     } else if (step.click) await page.click(step.click);
+    else if (step.clickAt) await page.mouse.click(step.clickAt[0], step.clickAt[1]);
     else if (step.fill) await page.fill(step.fill[0], step.fill[1]);
     else if (step.type) await page.locator(step.type[0]).pressSequentially(step.type[1]);
     else if (step.press) await page.press(step.press[0], step.press[1]);
@@ -118,7 +124,10 @@ for (const [i, step] of scenario.steps.entries()) {
       await page.screenshot({ path: path.join(outDir, `${step.shot}.png`), fullPage: !!step.fullPage, ...masking(step) });
       const found = {};
       for (const [key, selector] of Object.entries(step.boxes ?? {})) {
-        const box = await page.locator(selector).first().boundingBox();
+        // A box is a selector, or [x, y, w, h] in CSS px for things without a good selector.
+        const box = Array.isArray(selector)
+          ? { x: selector[0], y: selector[1], width: selector[2], height: selector[3] }
+          : await page.locator(selector).first().boundingBox();
         if (!box) throw new Error(`box "${key}" (${selector}) is not visible`);
         found[key] = { x: box.x, y: box.y, w: box.width, h: box.height };
       }
