@@ -225,7 +225,8 @@
       const bar = E.browserBar === false ? 50 : 102, fit = (H - 88 - 28) / (vh + bar);
       const s = E.phoneScale ?? fit, bezel = Math.round(14 * s), chrome = bar * s;
       const w = vw * s + bezel * 2, h = vh * s + chrome + bezel * 2;
-      const x = E.phoneX ?? Math.round(W * 0.08);
+      // Landscape: phone on the left, step text on the right. Vertical: phone centred, text below.
+      const x = E.phoneX ?? (H > W ? Math.round((W - w) / 2) : Math.round(W * 0.08));
       return { x, y: 44, w, h, s, chrome, bezel, vx: bezel, vy: bezel + chrome, vw: vw * s, vh: vh * s };
     }
     const maxW = W - layout.pad * 2, maxH = H - layout.top - layout.bottom - layout.chrome;
@@ -486,7 +487,8 @@
     side.hidden = !sideMode;
     if (sideMode) {
       const R = windowRect();
-      Object.assign(side.style, { left: R.x + R.w + 110 + "px", right: layout.pad + "px" });
+      if (H > W) Object.assign(side.style, { left: layout.pad + "px", right: layout.pad + "px", top: Math.min(H - 420, R.y + R.h + 44) + "px", bottom: "60px", justifyContent: "flex-start" });
+      else Object.assign(side.style, { left: R.x + R.w + 110 + "px", right: layout.pad + "px" });
       const steps = scenes.filter((s) => s.step), n = steps.findIndex((s) => s.id === sc.id) + 1;
       side.querySelector(".sn").textContent = sc.step ? `Шаг ${n} из ${steps.length}` : "";
       side.querySelector(".sn").style.display = sc.step && E.stepNumbers !== false ? "" : "none";
